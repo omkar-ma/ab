@@ -1,140 +1,47 @@
-# ab
 
-
-#define F_CPU 16000000UL
 #include <avr/io.h>
 #include <avr/interrupt.h>
 
-void UART_init(void)
+void setup()
 {
-    UCSR0A = 0;                 // Normal speed
-    UBRR0H = 0;
-    UBRR0L = 103;               // 9600 baud
-
-    UCSR0B = (1 << RXEN0) | (1 << TXEN0) | (1 << RXCIE0);
-    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
-}
-
-void UART_transmit(char data)
-{
-    while (!(UCSR0A & (1 << UDRE0)));
-    UDR0 = data;
-}
-
-ISR(USART_RX_vect)
-{
-    volatile char ch = UDR0;
-    UART_transmit(ch);
-}
-
-int main(void)
-{
-    UART_init();
+    // Enable global interrupt
     sei();
 
-    while (1)
-    {
-        // CPU free
-    }
+    // ---------------- ADC CONFIGURATION ----------------
+
+    // Set reference to AREF (NO internal reference), select ADC0 initially
+    ADMUX &= ~(1 << REFS0);
+    ADMUX &= ~(1 << REFS1);
+
+    // Right adjust ADC result
+    ADMUX &= ~(1 << ADLAR);
+
+    // Enable ADC, ADC Interrupt, Auto Trigger
+    // Prescaler = 16
+    ADCSRA |= (1 << ADEN) | (1 << ADIE) | (1 << ADATE) | (1 << ADPS2);
+    ADCSRA &= ~((1 << ADPS1) | (1 << ADPS0));
+
+    // ADC clock = 16 MHz / 16 = 1 MHz
+
+    // Start ADC conversion
+    ADCSRA |= (1 << ADSC);
+
+    // Select ADC0 channel
+    ADMUX &= ~(1 << MUX0);
+    ADMUX &= ~(1 << MUX1);
+    ADMUX &= ~(1 << MUX2);
+    ADMUX &= ~(1 << MUX3);
 }
 
-
-
-
-
-
-
-
-
-
-
-
-#define F_CPU 16000000UL
-
-#include <avr/io.h>
-#include <avr/interrupt.h>
-#include <util/delay.h>
-
-void UART_init(void)
+void loop()
 {
-    UCSR0A = 0;                 // Normal speed
-    UBRR0H = 0;
-    UBRR0L = 103;               // 9600 baud @ 16 MHz
-
-    UCSR0B = (1 << RXEN0) | (1 << TXEN0) | (1 << RXCIE0);
-    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);   // 8N1
+    // Main loop empty
+    // ADC handled by interrupt
 }
 
-void UART_transmit(char data)
+// ---------------- ADC INTERRUPT ----------------
+ISR(ADC_vect)
 {
-    while (!(UCSR0A & (1 << UDRE0)));
-    UDR0 = data;
-
-    _delay_ms(2);   // ✅ small delay (2 ms)
-}
-
-ISR(USART_RX_vect)
-{
-    char ch = UDR0;       // Read received data
-    UART_transmit(ch);    // Echo back
-}
-
-int main(void)
-{
-    UART_init();
-    sei();                // Enable global interrupts
-
-    while (1)
-    {
-        // CPU is free
-    }
-}
-
-
-
-
-
-
-
-
-
-
-#define F_CPU 16000000UL
-#include <avr/io.h>
-#include <avr/interrupt.h>
-#include <util/delay.h>
-
-void UART_init(void)
-{
-    UCSR0A = 0;
-    UBRR0H = 0;
-    UBRR0L = 103;               // 9600 baud @ 16 MHz
-
-    UCSR0B = (1 << RXEN0) | (1 << TXEN0) | (1 << RXCIE0);
-    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
-}
-
-void UART_transmit(char data)
-{
-    while (!(UCSR0A & (1 << UDRE0)));
-    UDR0 = data;
-}
-
-ISR(USART_RX_vect)
-{
-    char ch = UDR0;
-    _delay_us(100);             // ⭐ VERY IMPORTANT
-    UART_transmit(ch);
-}
-
-int main(void)
-{
-    UART_init();
-    sei();
-
-    while (1)
-    {
-        // CPU free
-    }
+    OCR1A = ADC;   // ADC value: 0–1023
 }
 
