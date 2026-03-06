@@ -1,21 +1,24 @@
-uint8_t test_cmd[2] = {0x00, 0x04};
-uint16_t test_pec = pec15_calc(2, test_cmd);
+/*
+ * LTC6811-2 Cell Voltage Monitoring
+ * MCU     : PIC16F183xx
+ * Fosc    : 16 MHz
+ * SPI Clk : 250 kHz (FOSC/64)
+ * SPI Mode: Mode 3 (CKP=1, CKE=0)
+ */
 
-printf("PEC = %04X\r\n", test_pec);
-
-
-
-PEC = 07C2
-
-
-
-
-
-
-
+#include <xc.h>
 #include <stdint.h>
+#include <stdio.h>
 
-// PEC15 Lookup Table
+// ─────────────────────────────────────────
+//  PIN DEFINITIONS  (change to your pins)
+// ─────────────────────────────────────────
+#define CS_LOW()   LATCbits.LATC2 = 0
+#define CS_HIGH()  LATCbits.LATC2 = 1
+
+// ─────────────────────────────────────────
+//  PEC15 LOOKUP TABLE
+// ─────────────────────────────────────────
 const uint16_t pec15Table[256] = {
     0x0000, 0xC599, 0xCEAB, 0x0B32, 0xD8CF, 0x1D56, 0x1664, 0xD3FD,
     0xF407, 0x319E, 0x3AAC, 0xFF35, 0x2CC8, 0xE951, 0xE263, 0x27FA,
@@ -32,7 +35,7 @@ const uint16_t pec15Table[256] = {
     0xA8EB, 0x6D72, 0x6640, 0xA3D9, 0x7024, 0xB5BD, 0xBE8F, 0x7B16,
     0x5CEC, 0x9975, 0x9247, 0x57DE, 0x8423, 0x41BA, 0x4A88, 0x8F11,
     0x057C, 0xC0E5, 0xCBD7, 0x0E4E, 0xDDB3, 0x182A, 0x1318, 0xD681,
-    0xF17B, 0x34E2, 0x3FD0, 0xFA49, 0x29B4, 0xEC2D, 0xE71F, 0x22860,
+    0xF17B, 0x34E2, 0x3FD0, 0xFA49, 0x29B4, 0xEC2D, 0xE71F, 0x2286,
     0xA213, 0x678A, 0x6CB8, 0xA921, 0x7ADC, 0xBF45, 0xB477, 0x71EE,
     0x5614, 0x938D, 0x98BF, 0x5D26, 0x8EDB, 0x4B42, 0x4070, 0x85E9,
     0x0F84, 0xCA1D, 0xC12F, 0x04B6, 0xD74B, 0x12D2, 0x19E0, 0xDC79,
@@ -51,37 +54,216 @@ const uint16_t pec15Table[256] = {
     0x5368, 0x96F1, 0x9DC3, 0x585A, 0x8BA7, 0x4E3E, 0x450C, 0x8095
 };
 
-// PEC15 Calculation Function
+// ─────────────────────────────────────────
+//  PEC15 CALCULATION
+// ─────────────────────────────────────────
 uint16_t PEC15_Calc(uint8_t len, uint8_t *data) {
-    uint16_t remainder = 16;  // PEC seed value
+    uint16_t remainder = 16;  // seed
     uint16_t addr;
-
     for (uint8_t i = 0; i < len; i++) {
-        addr = ((remainder >> 7) ^ data[i]) & 0xFF;  // get index
+        addr = ((remainder >> 7) ^ data[i]) & 0xFF;
         remainder = (remainder << 8) ^ pec15Table[addr];
     }
-
-    return (remainder * 2);  // shift left by 1 bit
+    return (remainder * 2);  // shift left 1
 }
 
+// ─────────────────────────────────────────
+//  SPI INIT
+// ─────────────────────────────────────────
+void SPI_Init(void) {
+    // Set pin directions
+    TRISCbits.TRISC2 = 0;   // CS  → Output
+    TRISCbits.TRISC3 = 0;   // SCK → Output
+    TRISCbits.TRISC4 = 1;   // SDI (MISO) → Input
+    TRISCbits.TRISC5 = 0;   // SDO (MOSI) → Output
 
+    CS_HIGH();               // CS idle high
 
+    SSP1CON1bits.SSPEN = 0;         // Disable SPI before config
+    SSP1CON1bits.SSPM  = 0b0010;    // SPI Master, FOSC/64 = 250kHz @ 16MHz
+    SSP1CON1bits.CKP   = 1;         // Clock idle HIGH  (Mode 3)
+    SSP1STATbits.CKE   = 0;         // Data valid on 2nd edge (Mode 3)
+    SSP1STATbits.SMP   = 0;         // Sample at middle
+    SSP1CON1bits.SSPEN = 1;         // Enable SPI
+}
 
+// ─────────────────────────────────────────
+//  SPI WRITE & READ BYTE
+// ─────────────────────────────────────────
+uint8_t SPI_TransferByte(uint8_t tx) {
+    SSP1BUF = tx;                        // Send byte
+    while (!SSP1STATbits.BF);           // Wait until transfer complete
+    return SSP1BUF;                      // Return received byte
+}
 
+void SPI_WriteByte(uint8_t tx) {
+    SPI_TransferByte(tx);               // Send, ignore received
+}
 
+uint8_t SPI_ReadByte(void) {
+    return SPI_TransferByte(0xFF);      // Send dummy, read response
+}
 
+// ─────────────────────────────────────────
+//  LTC6811-2 WAKE UP
+// ─────────────────────────────────────────
+void LTC6811_WakeUp(void) {
+    CS_LOW();
+    SPI_WriteByte(0xFF);    // dummy byte to wake IC
+    CS_HIGH();
+    __delay_us(400);        // tWAKE = 400us minimum
+}
 
+// ─────────────────────────────────────────
+//  SEND COMMAND HELPER
+// ─────────────────────────────────────────
+void LTC6811_SendCmd(uint8_t cmd0, uint8_t cmd1) {
+    uint8_t cmd[2] = {cmd0, cmd1};
+    uint16_t pec = PEC15_Calc(2, cmd);
 
+    CS_LOW();
+    SPI_WriteByte(cmd[0]);
+    SPI_WriteByte(cmd[1]);
+    SPI_WriteByte((uint8_t)(pec >> 8));
+    SPI_WriteByte((uint8_t)(pec));
+    CS_HIGH();
+}
 
-uint8_t cmd[2]  = {0x00, 0x01};   // WRCFGA command bytes
-uint8_t data[6] = {0xFE, 0x00, 0x00, 0x00, 0x00, 0x00};  // config bytes
+// ─────────────────────────────────────────
+//  WRCFGA - Write Configuration Register A
+// ─────────────────────────────────────────
+void LTC6811_WRCFGA(void) {
+    uint8_t cmd[2]  = {0x00, 0x01};  // WRCFGA command
 
-// Calculate PEC for command
-uint16_t cmdPEC  = PEC15_Calc(2, cmd);
-uint8_t  cmdPEC_high = (uint8_t)(cmdPEC >> 8);
-uint8_t  cmdPEC_low  = (uint8_t)(cmdPEC);
+    // Configuration bytes
+    uint8_t data[6];
+    data[0] = 0xFE;  // CFGR0: REFON=1 (keep reference on), GPIO pulldowns off
+    data[1] = 0x00;  // CFGR1: VUV[7:0] = 0
+    data[2] = 0x00;  // CFGR2: VOV[3:0]=0, VUV[11:8]=0
+    data[3] = 0x00;  // CFGR3: VOV[11:4] = 0
+    data[4] = 0x00;  // CFGR4: DCC8-DCC1 = 0 (no cell balancing)
+    data[5] = 0x00;  // CFGR5: DCTO=0, DCC12-DCC9=0
 
-// Calculate PEC for data
-uint16_t dataPEC = PEC15_Calc(6, data);
-uint8_t  dataPEC_high = (uint8_t)(dataPEC >> 8);
-uint8_t  dataPEC_low  = (uint8_t)(dataPEC);
+    uint16_t cmdPEC  = PEC15_Calc(2, cmd);
+    uint16_t dataPEC = PEC15_Calc(6, data);
+
+    CS_LOW();
+    // Send command + PEC
+    SPI_WriteByte(cmd[0]);
+    SPI_WriteByte(cmd[1]);
+    SPI_WriteByte((uint8_t)(cmdPEC >> 8));
+    SPI_WriteByte((uint8_t)(cmdPEC));
+    // Send data + PEC
+    for (uint8_t i = 0; i < 6; i++) SPI_WriteByte(data[i]);
+    SPI_WriteByte((uint8_t)(dataPEC >> 8));
+    SPI_WriteByte((uint8_t)(dataPEC));
+    CS_HIGH();
+}
+
+// ─────────────────────────────────────────
+//  ADCV - Start ADC Voltage Conversion
+//  MD=01 (Normal), DCP=0, CH=000 (All cells)
+// ─────────────────────────────────────────
+void LTC6811_ADCV(void) {
+    // ADCV command: 0x0260 (Normal mode, all cells)
+    LTC6811_SendCmd(0x02, 0x60);
+    __delay_ms(3);   // Wait for conversion (~2.3ms for normal mode)
+}
+
+// ─────────────────────────────────────────
+//  READ CELL VOLTAGE REGISTERS
+//  RDCVA = cells 1,2,3  → cmd 0x0004
+//  RDCVB = cells 4,5,6  → cmd 0x0006
+// ─────────────────────────────────────────
+void LTC6811_ReadVoltages(float *cellVoltage) {
+    uint8_t rxBuf[8];   // 6 data bytes + 2 PEC bytes
+    uint8_t cmd[2];
+    uint16_t pec;
+    uint16_t rawVal;
+
+    // --- Read RDCVA (Cell 1, 2, 3) ---
+    cmd[0] = 0x00; cmd[1] = 0x04;
+    pec = PEC15_Calc(2, cmd);
+
+    CS_LOW();
+    SPI_WriteByte(cmd[0]);
+    SPI_WriteByte(cmd[1]);
+    SPI_WriteByte((uint8_t)(pec >> 8));
+    SPI_WriteByte((uint8_t)(pec));
+    for (uint8_t i = 0; i < 8; i++) rxBuf[i] = SPI_ReadByte();
+    CS_HIGH();
+
+    // Parse Cell 1, 2, 3 (each 2 bytes, LSB first)
+    rawVal = (uint16_t)(rxBuf[1] << 8) | rxBuf[0];
+    cellVoltage[0] = rawVal * 0.0001f;   // 100uV per LSB
+
+    rawVal = (uint16_t)(rxBuf[3] << 8) | rxBuf[2];
+    cellVoltage[1] = rawVal * 0.0001f;
+
+    rawVal = (uint16_t)(rxBuf[5] << 8) | rxBuf[4];
+    cellVoltage[2] = rawVal * 0.0001f;
+
+    // --- Read RDCVB (Cell 4, 5, 6) ---
+    cmd[0] = 0x00; cmd[1] = 0x06;
+    pec = PEC15_Calc(2, cmd);
+
+    CS_LOW();
+    SPI_WriteByte(cmd[0]);
+    SPI_WriteByte(cmd[1]);
+    SPI_WriteByte((uint8_t)(pec >> 8));
+    SPI_WriteByte((uint8_t)(pec));
+    for (uint8_t i = 0; i < 8; i++) rxBuf[i] = SPI_ReadByte();
+    CS_HIGH();
+
+    // Parse Cell 4, 5, 6
+    rawVal = (uint16_t)(rxBuf[1] << 8) | rxBuf[0];
+    cellVoltage[3] = rawVal * 0.0001f;
+
+    rawVal = (uint16_t)(rxBuf[3] << 8) | rxBuf[2];
+    cellVoltage[4] = rawVal * 0.0001f;
+
+    rawVal = (uint16_t)(rxBuf[5] << 8) | rxBuf[4];
+    cellVoltage[5] = rawVal * 0.0001f;
+}
+
+// ─────────────────────────────────────────
+//  MAIN
+// ─────────────────────────────────────────
+void main(void) {
+
+    // Oscillator setup (16MHz internal - adjust for your config bits)
+    OSCCONbits.IRCF = 0b1111;   // 16MHz HFINTOSC
+    OSCCONbits.SCS  = 0b10;     // Internal oscillator
+
+    float cellVoltage[6];       // Stores voltage for cells 1-6
+
+    SPI_Init();                 // Init SPI
+
+    while (1) {
+
+        LTC6811_WakeUp();       // 1. Wake up LTC6811-2
+        __delay_us(10);
+
+        LTC6811_WRCFGA();       // 2. Write configuration
+        __delay_us(10);
+
+        LTC6811_ADCV();         // 3. Start ADC conversion (includes 3ms wait)
+
+        LTC6811_WakeUp();       // 4. Wake up again before reading
+        __delay_us(10);
+
+        LTC6811_ReadVoltages(cellVoltage);  // 5. Read all cell voltages
+
+        // cellVoltage[0] = Cell 1 voltage in Volts
+        // cellVoltage[1] = Cell 2 voltage in Volts
+        // cellVoltage[2] = Cell 3 voltage in Volts
+        // cellVoltage[3] = Cell 4 voltage in Volts
+        // cellVoltage[4] = Cell 5 voltage in Volts
+        // cellVoltage[5] = Cell 6 voltage in Volts
+
+        // Add your UART print or LCD display code here
+        // Example: printf("C1: %.4fV\n", cellVoltage[0]);
+
+        __delay_ms(500);        // Read every 500ms
+    }
+}
