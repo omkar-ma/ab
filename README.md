@@ -265,5 +265,11 @@ void main(void) {
         // Example: printf("C1: %.4fV\n", cellVoltage[0]);
 
         __delay_ms(500);        // Read every 500ms
-    }
+    }[19/03, 8:23 am] Rajveer Thakur Mmcoe: Radium 6455
+[19/03, 8:23 am] Rajveer Thakur Mmcoe: Alien power APS6355S
+[19/03, 8:23 am] Rajveer Thakur Mmcoe: E-Power Hobby 6354 190KV 2450W Outrunner Brushless Motor
+[19/03, 8:23 am] Rajveer Thakur Mmcoe: Ingenium 6374 170KV
+[19/03, 8:23 am] Rajveer Thakur Mmcoe: Scorpion SII-5525-170KV
+[19/03, 8:23 am] Rajveer Thakur Mmcoe: Marsen 6374 170KV Sensored Motor
+
 }
